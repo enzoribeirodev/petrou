@@ -32,6 +32,7 @@ from petrou.optimization import (
     exhaustive_search,
     PSO,
     InertiaRegistry,
+    PSOLF,
 )
 
 # Objectives
@@ -68,7 +69,7 @@ from petrou.metrics import (
 # Analysis
 from petrou.analysis import line_profile_bresenham
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     # exceptions
@@ -77,7 +78,7 @@ __all__ = [
     # optimization
     "SearchSpace", "VariableDef",
     "simulated_annealing", "exhaustive_search",
-    "PSO", "InertiaRegistry",
+    "PSO", "InertiaRegistry", "PSOLF",
     # objectives
     "otsu_criterion",
     "tsallis_entropy", "tsallis_q_automatic",
