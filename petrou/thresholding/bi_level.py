@@ -26,6 +26,10 @@ Optimizer dispatch
 ``"pso"``
     :class:`~petrou.optimization.pso.PSO`.  Same SearchSpace interface as SA.
 
+``"psolf"``
+    :class:`~petrou.optimization.psolf.PSOLF`.  PSO with a Levy-flight
+    velocity update (Jensi & Jiji, 2016).  Same SearchSpace interface.
+
 Adding a new optimizer
 -----------------------
 Add a branch to :func:`_run_optimizer`.  Nothing else needs to change — all
@@ -50,6 +54,7 @@ from petrou.objectives.entropy import (
 from petrou.objectives.variance import otsu_criterion
 from petrou.optimization.exhaustive import exhaustive_search
 from petrou.optimization.pso import PSO
+from petrou.optimization.psolf import PSOLF
 from petrou.optimization.sa import simulated_annealing
 from petrou.optimization.search_space import SearchSpace
 
@@ -145,8 +150,15 @@ def _run_optimizer(
         pso = PSO(objective_fn, n, search_space=space, mode=mode, **config)
         return pso.optimize(iters)
 
+    if optimizer == "psolf":
+        n = config.pop("n_particles", 25)
+        iters = config.pop("max_iterations", 100)
+        mode = config.pop("mode", "max")
+        psolf = PSOLF(objective_fn, n, search_space=space, mode=mode, **config)
+        return psolf.optimize(iters)
+
     raise IncompatibleStrategyError(
-        f"Unknown optimizer '{optimizer}'. Choose 'exhaustive', 'sa', or 'pso'."
+        f"Unknown optimizer '{optimizer}'. Choose 'exhaustive', 'sa', 'pso', or 'psolf'."
     )
 
 
@@ -173,7 +185,7 @@ def find_otsu_threshold(
     ----------
     img_region : np.ndarray
         Grayscale pixel array, any shape.
-    optimizer : {"exhaustive", "sa", "pso"}
+    optimizer : {"exhaustive", "sa", "pso", "psolf"}
         ``"exhaustive"`` is strongly recommended — it calls
         ``otsu_criterion(hist)`` (no ``t``), computing all 256 variances in
         one vectorised pass with no loop.
@@ -182,8 +194,8 @@ def find_otsu_threshold(
     optimizer_config : dict, optional
         Keyword arguments forwarded to the chosen optimizer.
         SA extra key: ``step`` (int threshold step, default 10).
-        PSO extra keys: ``n_particles`` (default 20), ``max_iterations``
-        (default 100).
+        PSO / PSOLF extra keys: ``n_particles`` (default 20 / 25),
+        ``max_iterations`` (default 100).
 
     Returns
     -------
@@ -241,22 +253,22 @@ def find_tsallis_threshold(
             Use ``q_fixed`` directly.  Compatible with all optimizers.
         ``"optimize"``
             Treat ``q`` as a free variable and co-optimize with ``t``.
-            Requires ``optimizer`` in ``{"sa", "pso"}`` — exhaustive search
+            Requires ``optimizer`` in ``{"sa", "pso", "psolf"}`` — exhaustive search
             cannot enumerate a continuous variable.
     q_fixed : float, optional
         Required when ``q_strategy="fixed"``.
-    optimizer : {"exhaustive", "sa", "pso"}
+    optimizer : {"exhaustive", "sa", "pso", "psolf"}
     search_range : (int, int)
         Threshold search bounds ``[lo, hi)``.
     q_bounds : (float, float)
         Bounds for ``q`` when ``q_strategy="optimize"``.
     q_step : float
-        Gaussian σ for ``q`` perturbation in SA / PSO.
+        Gaussian σ for ``q`` perturbation in SA / PSO / PSOLF.
     add_log_noise : bool
         Add ε = 1e-12 inside log.  Recommended with ``q_strategy="optimize"``.
     optimizer_config : dict, optional
         Extra SA key: ``t_step`` (default 5).
-        Extra PSO keys: ``n_particles``, ``max_iterations``.
+        Extra PSO / PSOLF keys: ``n_particles``, ``max_iterations``.
 
     Returns
     -------
@@ -269,7 +281,7 @@ def find_tsallis_threshold(
     if q_strategy == "optimize":
         if optimizer == "exhaustive":
             raise IncompatibleStrategyError(
-                "q_strategy='optimize' needs optimizer='sa' or 'pso'. "
+                "q_strategy='optimize' needs optimizer='sa', 'pso', or 'psolf'. "
                 "The joint (q, t) space cannot be exhaustively enumerated. "
                 "Use q_strategy='automatic' or 'fixed' with exhaustive."
             )
@@ -339,10 +351,10 @@ def find_masi_threshold(
             Use ``r_fixed`` directly.  Compatible with all optimizers.
         ``"optimize"``
             Co-optimize ``r`` and ``t`` jointly.
-            Requires ``optimizer`` in ``{"sa", "pso"}``.
+            Requires ``optimizer`` in ``{"sa", "pso", "psolf"}``.
     r_fixed : float, optional
         Required when ``r_strategy="fixed"``.
-    optimizer : {"exhaustive", "sa", "pso"}
+    optimizer : {"exhaustive", "sa", "pso", "psolf"}
     search_range : (int, int)
     r_bounds : (float, float)
     r_step : float
@@ -360,7 +372,7 @@ def find_masi_threshold(
     if r_strategy == "optimize":
         if optimizer == "exhaustive":
             raise IncompatibleStrategyError(
-                "r_strategy='optimize' needs optimizer='sa' or 'pso'. "
+                "r_strategy='optimize' needs optimizer='sa', 'pso', or 'psolf'. "
                 "The joint (r, t) space cannot be exhaustively enumerated."
             )
         t_step = config.pop("t_step", 5)
