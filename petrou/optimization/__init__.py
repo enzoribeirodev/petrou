@@ -4,6 +4,7 @@ from petrou.optimization.search_space import SearchSpace, VariableDef
 from petrou.optimization.sa import simulated_annealing
 from petrou.optimization.exhaustive import exhaustive_search
 from petrou.optimization.pso import PSO, InertiaRegistry
+from petrou.optimization.psolf import PSOLF
 
 __all__ = [
     "SearchSpace",
@@ -12,4 +13,5 @@ __all__ = [
     "exhaustive_search",
     "PSO",
     "InertiaRegistry",
+    "PSOLF",
 ]
