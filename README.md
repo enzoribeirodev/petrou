@@ -1,6 +1,6 @@
 # petrou
 
-**petrou** is a Python library for image thresholding and segmentation optimization. It implements Otsu, Tsallis, and MASI thresholding criteria, three optimization backends (Exhaustive Search, Simulated Annealing, and Particle Swarm Optimization), segmentation evaluation metrics, and a Bresenham line-profile tool — all sharing a single, uniform interface built around the `SearchSpace` abstraction.
+**petrou** is a Python library for image thresholding and segmentation optimization. It implements Otsu, Tsallis, and MASI thresholding criteria, four optimization backends (Exhaustive Search, Simulated Annealing, Particle Swarm Optimization, and PSOLF — PSO with Levy Flight), segmentation evaluation metrics, and a Bresenham line-profile tool — all sharing a single, uniform interface built around the `SearchSpace` abstraction.
 
 ```
 pip install petrou
@@ -26,6 +26,7 @@ pip install petrou[vis]
    - 6.2 [Simulated Annealing](#62-simulated-annealing)
    - 6.3 [PSO](#63-pso)
    - 6.4 [InertiaRegistry](#64-inertiaregistry)
+   - 6.5 [PSOLF](#65-psolf)
 7. [Bi-level thresholding](#7-bi-level-thresholding)
    - 7.1 [ThresholdResult](#71-thresholdresult)
    - 7.2 [Otsu](#72-otsu)
@@ -50,7 +51,10 @@ petrou/
 │   ├── search_space.py    SearchSpace, VariableDef
 │   ├── sa.py              simulated_annealing
 │   ├── exhaustive.py      exhaustive_search
-│   └── pso.py             PSO, InertiaRegistry
+│   ├── _pso_base.py       Particle, InertiaRegistry, SwarmOptimizer
+│   │                      (shared base — not part of the public API)
+│   ├── pso.py             PSO
+│   └── psolf.py           PSOLF (PSO with Levy Flight)
 ├── objectives/
 │   ├── variance.py        otsu_criterion
 │   └── entropy.py         tsallis_entropy, tsallis_q_automatic,
@@ -81,6 +85,7 @@ from petrou.thresholding.multi_level import multilevel_otsu
 from petrou.optimization.search_space import SearchSpace
 from petrou.optimization.sa import simulated_annealing
 from petrou.optimization.pso import PSO, InertiaRegistry
+from petrou.optimization.psolf import PSOLF
 from petrou.objectives.variance import otsu_criterion
 from petrou.objectives.entropy import tsallis_entropy, masi_entropy
 from petrou.metrics.segmentation import jaccard_index, dice_coefficient
@@ -368,6 +373,8 @@ best_state, best_score, history = simulated_annealing(
 
 ### 6.3 PSO
 
+PSO and every other swarm-based optimizer (e.g. `PSOLF`, §6.5) share their particle state, construction, and iteration loop through an internal `SwarmOptimizer` base (`petrou/optimization/_pso_base.py`). Each variant only implements its own velocity/position update rule — see §12 for how to add one.
+
 ```python
 from petrou.optimization.pso import PSO
 from petrou.optimization.search_space import SearchSpace
@@ -413,6 +420,7 @@ Built-in inertia strategies:
 | `"global-local best"` | `w_ij = 1.1 − g_ij / p_ij` |
 | `"chaotic descending"` | Decreasing trend + logistic chaos |
 | `"chaotic random"` | Random base + logistic chaos |
+| `"psolf"` | Linear decay from 0.9 to 0.1 — `PSOLF`'s own schedule (§6.5), usable by plain `PSO` too |
 
 ```python
 from petrou.optimization.pso import InertiaRegistry
@@ -444,6 +452,45 @@ def my_strategy(
 ) -> float | np.ndarray:           # scalar or per-dimension weight
 ```
 
+### 6.5 PSOLF
+
+PSOLF (Jensi & Wiselin Jiji, "An Enhanced Particle Swarm Optimization with Levy Flight for global optimization", *Applied Soft Computing*, 2016) replaces the velocity update with a coin flip each iteration: with probability `levy_probability` a particle takes a Levy-flight step (long jumps that preserve swarm diversity and reduce premature convergence); otherwise it takes the classic PSO step. It shares the same `SearchSpace`-based interface as `PSO` — same `optimize()` signature, same `InertiaRegistry` — because both build on the `SwarmOptimizer` base described in §6.3.
+
+```python
+from petrou.optimization.psolf import PSOLF
+from petrou.optimization.search_space import SearchSpace
+
+space = SearchSpace([
+    {"name": "t", "type": "int", "bounds": (1, 254), "step": 5},
+])
+
+psolf = PSOLF(
+    objective_fn     = lambda s: score(int(round(s[0]))),
+    num_particles    = 25,      # Jensi's default
+    search_space     = space,
+    mode             = "max",   # "max" or "min"
+    c1               = 1.2,     # cognitive coefficient
+    c2               = 1.8,     # social coefficient
+    beta             = 1.5,     # Levy stability index (Mantegna's algorithm)
+    levy_probability = 0.5,     # chance of a Levy-flight step vs. classic PSO
+    seed             = 42,
+)
+
+best_pos, best_fit = psolf.optimize(
+    max_iterations   = 100,
+    inertia_strategy = "psolf",  # default — Eq. omega decreasing 0.9 -> 0.1
+)
+decoded = space.decode(best_pos)
+```
+
+**With convergence history:**
+
+```python
+best_pos, best_fit, history = psolf.optimize(100, return_history=True)
+```
+
+**Unlike `PSO`:** there is no `v_max` velocity clamp — PSOLF only clips the resulting *position* back into bounds after each move, matching the published algorithm. Jensi's reported benchmark setup is `num_particles=25`, `Max FEs=125000`, i.e. `max_iterations = 5000`.
+
 ---
 
 ## 7. Bi-level thresholding
@@ -458,7 +505,7 @@ class ThresholdResult:
     threshold : int     # optimal threshold in [0, 255]
     score     : float   # objective value at optimum (higher = better)
     params    : dict    # {"q": float}, {"r": float}, or {} for Otsu
-    optimizer : str     # "exhaustive", "sa", or "pso"
+    optimizer : str     # "exhaustive", "sa", "pso", or "psolf"
 ```
 
 Applying the threshold:
@@ -495,6 +542,17 @@ result = find_otsu_threshold(
     optimizer        = "pso",
     optimizer_config = {
         "n_particles":    20,
+        "max_iterations": 100,
+        "seed":           0,
+    },
+)
+
+# PSOLF
+result = find_otsu_threshold(
+    img,
+    optimizer        = "psolf",
+    optimizer_config = {
+        "n_particles":    25,
         "max_iterations": 100,
         "seed":           0,
     },
@@ -554,6 +612,23 @@ result = find_tsallis_threshold(
     img,
     q_strategy       = "optimize",
     optimizer        = "pso",
+    add_log_noise    = True,
+    optimizer_config = {
+        "n_particles":    25,
+        "max_iterations": 100,
+        "seed":           0,
+        "t_step":         5,
+    },
+)
+```
+
+**`"optimize"` with PSOLF:**
+
+```python
+result = find_tsallis_threshold(
+    img,
+    q_strategy       = "optimize",
+    optimizer        = "psolf",
     add_log_noise    = True,
     optimizer_config = {
         "n_particles":    25,
@@ -631,6 +706,8 @@ result = find_masi_threshold(
     },
 )
 ```
+
+(`optimizer="psolf"` works identically — same `optimizer_config` keys.)
 
 **`"adaptive"` with SA:**
 
@@ -847,7 +924,10 @@ except InvalidSearchSpaceError as e:
 
 ## 12. Developer guide — adding a new optimizer
 
-This example adds **Differential Evolution**. The same pattern applies to any other population-based or trajectory-based algorithm.
+Two shapes exist in `petrou.optimization`, pick the one that matches what you're adding:
+
+* **Function-style** (`sa.py`, `exhaustive.py`) — a single free function taking `search_space: SearchSpace` and returning `(best_state, best_score)`. Use this for anything that isn't a population of particles sharing velocity/position updates. Walked through below with **Differential Evolution**.
+* **Swarm-based** (`pso.py`, `psolf.py`) — any PSO variant (e.g. CLPSO, HPSO-TVAC, the original LFPSO). These all move a population of particles with a velocity/position rule and an inertia weight, so they subclass the shared `SwarmOptimizer` base instead of reimplementing that loop. See **§12.1** below — it's usually *less* code than the function-style path.
 
 ### Step 1 — Create the file
 
@@ -963,6 +1043,68 @@ segmented, info = multilevel_otsu(
     optimizer        = "de",
     optimizer_config = {"population_size": 30, "max_iter": 200},
 )
+```
+
+### 12.1 Swarm-based variants (a new flavor of PSO)
+
+`petrou/optimization/_pso_base.py` holds everything a swarm optimizer needs that *isn't* its update rule: `Particle` (position/velocity/personal-best state), `InertiaRegistry` (pluggable named inertia strategies — shared across every variant, so a strategy registered by one is usable by all), and `SwarmOptimizer` (construction + the evaluate → track-best → resolve-inertia → move loop, with or without history).
+
+A new variant subclasses `SwarmOptimizer` and implements exactly one method:
+
+```python
+_apply_update(self, p: Particle, w: float) -> None
+```
+
+which sets `p.velocity` and `p.position` in place — that's the only thing that differs between PSO variants. This is the whole worked example for CLPSO-style comprehensive learning (illustrative, not a full transcription of the paper):
+
+```python
+# petrou/optimization/clpso.py
+from __future__ import annotations
+import numpy as np
+from petrou.optimization._pso_base import InertiaRegistry, Particle, SwarmOptimizer
+from petrou.optimization.search_space import SearchSpace
+
+__all__ = ["CLPSO"]
+
+
+class CLPSO(SwarmOptimizer):
+    default_inertia_strategy = "linearly decreasing"  # reused from pso.py, no re-registration needed
+
+    def __init__(self, objective_fn, num_particles, *, search_space: SearchSpace,
+                 mode="max", c1=1.49445, seed=None):
+        super().__init__(objective_fn, num_particles, search_space=search_space, mode=mode, seed=seed)
+        self.c1 = c1
+
+    def _apply_update(self, p: Particle, w: float) -> None:
+        exemplar = p.best_position  # replace with the real per-dimension exemplar selection
+        r1 = self.rng.random(p.dimensions)
+        p.velocity = w * p.velocity + self.c1 * r1 * (exemplar - p.position)
+        p.position = p.position + p.velocity
+```
+
+If a variant needs extra per-particle state (e.g. the original LFPSO's stagnation counter that triggers a Levy-flight reinitialisation after `Limit` idle iterations), subclass `Particle` with extra `__slots__` and point `particle_cls` at it:
+
+```python
+class _LFPSOParticle(Particle):
+    __slots__ = ("stall_count",)
+    def __init__(self, lower, upper, rng, mode):
+        super().__init__(lower, upper, rng, mode)
+        self.stall_count = 0
+
+class LFPSO(SwarmOptimizer):
+    particle_cls = _LFPSOParticle
+    ...
+```
+
+Export it (Step 3 above) and wire it into `_run_optimizer` (Step 4 above) exactly like `"psolf"`:
+
+```python
+if optimizer == "clpso":
+    n = config.pop("n_particles", 20)
+    iters = config.pop("max_iterations", 100)
+    mode = config.pop("mode", "max")
+    clpso = CLPSO(objective_fn, n, search_space=space, mode=mode, **config)
+    return clpso.optimize(iters)
 ```
 
 ---
